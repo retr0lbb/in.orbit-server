@@ -4,10 +4,10 @@ import { goalCompletions, goals } from '../db/schema'
 import dayjs from 'dayjs'
 
 export async function getWeekSummary() {
+  const lastDayOfWeek = dayjs().endOf('week').toDate()
   const fistDayOfWeek = dayjs().startOf('week').toDate()
-  const lasdDayOfWeek = dayjs().endOf('week').toDate()
 
-  const goalsCreatedUpToWeek = db.$with('goals_created_up_to_week').as(
+  const goalsCreateUpToWeek = db.$with('goals_create_up_to_week').as(
     db
       .select({
         id: goals.id,
@@ -16,7 +16,7 @@ export async function getWeekSummary() {
         createdAt: goals.createdAt,
       })
       .from(goals)
-      .where(lte(goals.createdAt, lasdDayOfWeek))
+      .where(lte(goals.createdAt, lastDayOfWeek))
   )
 
   const goalsCompletedInWeek = db.$with('goals_completed_in_week').as(
@@ -25,44 +25,58 @@ export async function getWeekSummary() {
         id: goalCompletions.id,
         title: goals.title,
         completedAt: goalCompletions.createdAt,
-        completedAtDate: sql`
-            DATE(${goalCompletions.createdAt})
-        `.as('completedAtDate'),
+        completedAtDate: sql`DATE(${goalCompletions.createdAt})`.as(
+          'completedAtDate'
+        ),
       })
       .from(goalCompletions)
       .innerJoin(goals, eq(goals.id, goalCompletions.goalId))
       .where(
         and(
           gte(goalCompletions.createdAt, fistDayOfWeek),
-          lte(goalCompletions.createdAt, lasdDayOfWeek)
+          lte(goalCompletions.createdAt, lastDayOfWeek)
         )
       )
   )
 
-  const goalsCompledteByWeekDay = db.$with('goals_completed_by_week_day').as(
+  const goalsCompletedByWeekDay = db.$with('goals_completed_by_week_day').as(
     db
       .select({
         completedAtDate: goalsCompletedInWeek.completedAtDate,
         completions: sql`
-            JSON_AGG(
-                JSON_BUILD_OBJECT(
-                    "id", ${goalsCompletedInWeek.id},
-                    "title", ${goalsCompletedInWeek.title},
-                    "completedAt", ${goalsCompletedInWeek.completedAt}   
-                )
+          JSON_AGG(
+            JSON_BUILD_OBJECT(
+              'id', ${goalsCompletedInWeek.id},
+              'title', ${goalsCompletedInWeek.title},
+              'completedAt', ${goalsCompletedInWeek.completedAt}
             )
+          )
         `.as('completions'),
       })
       .from(goalsCompletedInWeek)
-      .groupBy(goalsCompletedInWeek.completedAtDate.sql)
+      .groupBy(goalsCompletedInWeek.completedAtDate)
   )
 
   const result = await db
-    .with(goalsCreatedUpToWeek, goalsCompletedInWeek, goalsCompledteByWeekDay)
-    .select()
-    .from(goalsCompledteByWeekDay)
+    .with(goalsCreateUpToWeek, goalsCompletedInWeek, goalsCompletedByWeekDay)
+    .select({
+      completed: sql`(SELECT COUNT(*) FROM ${goalsCompletedInWeek})`.mapWith(
+        Number
+      ),
+      total:
+        sql`(SELECT SUM(${goalsCreateUpToWeek.desiredWeeklyFrenquency}) FROM ${goalsCreateUpToWeek})`.mapWith(
+          Number
+        ),
+      goalsPerDay: sql`
+        JSON_OBJECT_AGG(
+          ${goalsCompletedByWeekDay.completedAtDate},
+          ${goalsCompletedByWeekDay.completions}
+        )
+      `,
+    })
+    .from(goalsCompletedByWeekDay)
 
   return {
-    summary: result,
+    result: result,
   }
 }
